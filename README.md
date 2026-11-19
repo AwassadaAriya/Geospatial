@@ -1,8 +1,5 @@
 # Boston sea level rise map
-
-## Open the map
-
-Open `docs/index.html` in a browser.
+Research question: How is urbanization changing Boston's capacity to buffer heat and stormwater, and how does this change overlap with areas projected to experience sea-level-rise inundation?
 
 ## Rebuild the data
 

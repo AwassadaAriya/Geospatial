@@ -1,1 +1,1 @@
-window.EB=window.EB||{};window.EB.stats={"meta":{"parcels":21176,"bounds":[-71.0831,42.3219,-70.9863,42.397]}};
+window.EB=window.EB||{};window.EB.stats={"meta":{"parcels":21176,"bounds":[-71.0831,42.3219,-70.9863,42.397],"svi_indicators":7}};

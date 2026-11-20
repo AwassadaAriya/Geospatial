@@ -1,4 +1,4 @@
-/* East Boston sea level rise: three-view map.
+/* Three-view map of the Boston waterfront (page title lives only in index.html).
    Planner view   = Esri Light Gray Canvas, for decisions.
    Atlas view     = no tiles, the same layers drawn in a print language.
    Ink view       = Overprint: the same layers again, as halftone dots on a grid (docs/overprint.js).
@@ -22,31 +22,43 @@
   };
   const SLR_LABEL = { 0: "today", 21: "at +21 in, 2050s", 36: "at +36 in, 2070s" };
 
-  // ------------------------------------------------------------------ layer toggles (one list, both views)
+  // ------------------------------------------------------------------ layer toggles (one list, all views)
+  // each entry: [key, label, data sources]; the map credits are built from the sources (see SOURCES below)
+  const CRB = "Climate Ready Boston", ASSESS = "City of Boston Assessing", NLCD = "NLCD 2021", ACS = "US Census ACS via Esri Living Atlas";
   const GROUPS = [
-    ["Flooding", [["f21", "High tide at +21 in (2050s)"], ["f36", "High tide at +36 in (2070s)"], ["assets", "Critical assets"], ["unpave", "Public paved land"]]],
-    ["Food", [["stores", "Food stores"]]],
-    ["Movement", [["blueline", "Subway and Silver Line"]]],
-    ["Energy", [["power", "Electrical substations"]]],
+    ["Flooding", [["f21", "High tide at +21 in (2050s)", [CRB]], ["f36", "High tide at +36 in (2070s)", [CRB]], ["assets", "Critical assets", ["Analyze Boston"]], ["unpave", "Public paved land", [ASSESS, NLCD]]]],
+    ["Food", [["stores", "Food stores", ["USDA SNAP"]]]],
+    ["Movement", [["blueline", "Subway and Silver Line", ["MassGIS MBTA Rapid Transit"]]]],
+    ["Energy", [["power", "Electrical substations", ["Eversource GIS and EFSB"]]]],
   ];
   // layers that colour the same shapes cannot stack, so they are offered as one choice each
   const PICKS = [
-    ["Colour parcels by", "pf", [["expo", "Flood exposure"], ["imperv", "Impervious surface"], ["owner", "Owner type"]]],
-    ["Colour census tracts by", "tf", [["vuln", "Social vulnerability"], ["transit", "Workers who commute by transit"], ["noveh", "Households with no car"]]],
+    ["Colour parcels by", "pf", [["expo", "Flood exposure", [ASSESS, CRB]], ["imperv", "Impervious surface", [ASSESS, NLCD]], ["owner", "Owner type", [ASSESS]]]],
+    ["Colour census tracts by", "tf", [["vuln", "Social vulnerability", [CRB]], ["transit", "Workers who commute by transit", [ACS]], ["noveh", "Households with no car", [ACS]]]],
   ];
-  const PICK_KEYS = PICKS.flatMap((g) => g[2].map(([k]) => k));
+  // drawn whatever is ticked: neighbourhood outline and streets (Analyze Boston), land and water (census tract boundaries), the satellite x-ray
+  const BASE_SOURCES = ["Analyze Boston", ACS, "Esri World Imagery"];
+  const LAYERS = GROUPS.flatMap((g) => g[1]).concat(PICKS.flatMap((g) => g[2]));
+  const SOURCES = [...new Set(BASE_SOURCES.concat(LAYERS.flatMap((l) => l[2])))].join(" · ");
   const DEFAULT_ON = ["f36", "expo"];          // first glance: the flood and how much of each parcel it covers
 
   // ------------------------------------------------------------------ state (URL params make any state linkable)
   const q = new URLSearchParams(location.search);
-  const onList = q.get("on") ? q.get("on").split(",") : DEFAULT_ON;
-  const state = { view: q.get("view") || "planner", lens: q.get("lens") || "off", on: {} };
+  const onList = q.has("on") ? q.get("on").split(",").filter(Boolean) : DEFAULT_ON;     // "?on=" means nothing ticked
+  const VIEWS = ["planner", "atlas", "ink"], LENSES = ["off", "other", "sat"];
+  const state = { view: VIEWS.includes(q.get("view")) ? q.get("view") : "planner", lens: LENSES.includes(q.get("lens")) ? q.get("lens") : "off", on: {} };
+  function writeURL() {                  // keep the address bar in step so any state can be shared or reloaded
+    const p = new URLSearchParams(location.search);
+    p.set("view", state.view);
+    p.set("on", Object.keys(state.on).filter((k) => state.on[k]).join(","));
+    if (state.lens === "off") p.delete("lens"); else p.set("lens", state.lens);
+    history.replaceState(null, "", "?" + p.toString().replace(/%2C/g, ",") + location.hash);
+  }
   // the Overprint view uses the same toggles: each layer is one ink (owner type prints two)
   const OP = window.Overprint;
   const inkOn = (i) => !!state.on[i.follows || i.k] && !(i.byTide && slr() === "0");
   const slr = () => state.on.f36 ? "36" : state.on.f21 ? "21" : "0";   // scenario the data layers follow: the highest tide ticked
-  GROUPS.flatMap((g) => g[1]).forEach(([k]) => { state.on[k] = onList.includes(k); });
-  PICK_KEYS.forEach((k) => { state.on[k] = onList.includes(k); });
+  LAYERS.forEach(([k]) => { state.on[k] = onList.includes(k); });
 
   // ------------------------------------------------------------------ maps
   const GLYPHS = "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf";
@@ -66,7 +78,6 @@
   const ink = mk("map-ink", { version: 8, glyphs: GLYPHS, sources: {}, layers: [{ id: "paper", type: "background", paint: { "background-color": "#f0eee8" } }] }, true);
   const maps = { planner, atlas, ink, sat };
   let press = null;
-  const SOURCES = "Climate Ready Boston · City of Boston Assessing · USDA SNAP · ACS · OpenStreetMap · USGS 3DEP";
   planner.addControl(new maplibregl.AttributionControl({ compact: true, customAttribution: "Esri Light Gray Canvas · " + SOURCES }), "bottom-right");
   atlas.addControl(new maplibregl.AttributionControl({ compact: true, customAttribution: SOURCES }), "bottom-right");
   ink.addControl(new maplibregl.AttributionControl({ compact: true, customAttribution: SOURCES }), "bottom-right");
@@ -139,7 +150,7 @@
     add({ id: "stations-label", type: "symbol", source: "stations", layout: Object.assign({ "text-field": caps(["get", "name"]), "text-offset": [0, 1.2], "text-anchor": "top", "text-padding": 4, "text-letter-spacing": T.isAtlas ? 0.12 : 0 }, label(T.isAtlas ? 10.5 : 11.5)), paint: halo });
     add({ id: "power-label", type: "symbol", source: "power_subs", layout: Object.assign({ "text-field": caps(["get", "name"]), "text-offset": [0, 1.3], "text-anchor": "top", "text-padding": 4 }, label(10.5)), paint: Object.assign({}, halo, { "text-color": "#6b4410" }) });
     add({ id: "stores-label", type: "symbol", source: "stores", filter: ["==", ["get", "size"], 3], layout: Object.assign({ "text-field": ["get", "name"], "text-offset": [0, 1.2], "text-anchor": "top" }, label(10.5)), paint: halo });
-    wireTips(m);
+    wireTips(m, pickFeature(m));
   }
 
   // ------------------------------------------------------------------ apply state
@@ -191,6 +202,7 @@
     document.querySelectorAll("#controls input[type=radio]").forEach((i) => { i.checked = !!state.on[i.value]; });
     document.querySelectorAll("#controls .clear").forEach((b) => { b.hidden = !b.dataset.keys.split(",").some((k) => state.on[k]); });
     renderLegend();
+    writeURL();
   }
 
   // ------------------------------------------------------------------ panel: layer toggles
@@ -221,13 +233,20 @@
     if (on.expo && wet) h += `<div class="grp">Flood exposure, share of parcel under water${ramp(C.expo, "a little", "all of it")}</div>`;
     else if (on.imperv) h += `<div class="grp">Impervious surface, share of parcel${ramp(C.imperv, "under 50%", "over 95%")}</div>`;
     else if (on.owner) h += `<div class="grp">${row("", C.owner.public, "Public")}${row("", C.owner.exempt, "Tax exempt")}${row("", C.owner.private, "Private")}</div>`;
-    if (on.vuln) h += `<div class="grp">Social vulnerability, citywide percentile${ramp(C.people, "0", "100")}</div>`;
+    const nVuln = S.meta && S.meta.svi_indicators;      // written by map/export_web.py from the columns actually ranked
+    if (on.vuln) h += `<div class="grp">Social vulnerability: mean of ${nVuln ? nVuln + " " : ""}vulnerability percentile ranks (0-100)${ramp(C.people, "0", "100")}</div>`;
     if (on.transit) h += `<div class="grp">Workers who commute by transit${ramp(C.people, "under 30%", "over 60%")}</div>`;
     else if (on.noveh) h += `<div class="grp">Households with no car${ramp(C.people, "under 20%", "over 50%")}</div>`;
     let g = "";
     if (on.f21) g += row("", C.flood21, "High tide at +21 in, 2050s");
     if (on.f36) g += row("", C.flood36, "High tide at +36 in, 2070s");
     if (on.stores) g += row("dot", "#14532d", "Grocer, larger = supermarket") + row("dot", "#7f9b88", "Convenience store") + (wet ? row("ring", C.critical, "Store under water") : "");
+    if (on.blueline) {                                  // line swatch striped in the colours of the lines actually drawn
+      const cols = A ? ["#111"] : [...new Set(D.blueline.features.map((f) => C.lines[f.properties.line] || C.lines.other))];
+      const stripe = cols.map((c, i) => `${c} ${i / cols.length * 100}% ${(i + 1) / cols.length * 100}%`).join(",");
+      g += `<div class="lg-row"><span class="sw line" style="border-image:linear-gradient(90deg,${stripe}) 1"></span>Subway and Silver Line</div>` +
+        row("ring", T.stationRing, "Station");
+    }
     if (on.unpave) g += row("line", "#b25a00", "Public paved land");
     if (on.assets) g += row("dot", "#7a1f1f", "Critical asset");
     if (on.power) g += row("ring", C.power, "Electrical substation");
@@ -236,32 +255,45 @@
     $("#legend-panel").style.display = h ? "" : "none";
   }
 
-  // ------------------------------------------------------------------ tooltips on stores and stations
-  function wireTips(m) {
+  // ------------------------------------------------------------------ tooltips: stores, stations, substations, assets (Basemap, Etching) and inks (Overprint)
+  // pick(e) returns { lngLat, html } for what is under the pointer, or null
+  function wireTips(m, pick) {
     const pop = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 10 });
     let raf = 0;
     m.on("mousemove", (e) => {
       if (raf) return;
       raf = requestAnimationFrame(() => {
         raf = 0;
-        const f = m.queryRenderedFeatures(e.point, { layers: ["stores", "stations", "power-subs", "assets"] })[0];
-        if (f) pop.setLngLat(e.lngLat).setHTML(tip(f)).addTo(m); else pop.remove();
-        m.getCanvas().style.cursor = f ? "pointer" : "";
+        const hit = pick(e);
+        if (hit) pop.setLngLat(hit.lngLat).setHTML(hit.html).addTo(m); else pop.remove();
+        m.getCanvas().style.cursor = hit ? "pointer" : "";
       });
     });
     m.on("mouseout", () => pop.remove());
   }
+  const pickFeature = (m) => (e) => {
+    const f = m.queryRenderedFeatures(e.point, { layers: ["stores", "stations", "power-subs", "assets"] })[0];
+    return f ? { lngLat: e.lngLat, html: tip(f) } : null;
+  };
+  const pickInk = (e) => {
+    const hit = press && state.view === "ink" && press.at(e.point.x, e.point.y);
+    return hit ? { lngLat: hit.lngLat, html: hit.rows.map(({ ink, v }) =>
+      `<div class="lg-row"><span class="ink-sw" style="background:${ink.color}"></span><span><b>${esc(ink.label)}</b><br>${esc(ink.tip(v))}</span></div>`).join("") } : null;
+  };
+  // data strings go into popup HTML, so escape them
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const ASSET_LABEL = { school: "School", fire_station: "Fire station", police: "Police station", hospital: "Hospital", community_centre: "Community centre" };
   function tip(f) {
     const p = f.properties, s = slr();
-    if (f.layer.id === "power-subs") return `<b>${p.name} substation</b>` +
+    if (f.layer.id === "power-subs") return `<b>${esc(p.name)} substation</b>` +
       (s !== "0" && p["share_" + s] >= 0.25 ? `<br><span style="color:#b3261e">Under water ${SLR_LABEL[s]}</span>` : "");
-    if (f.layer.id === "assets") return `<b>${p.name || ASSET_LABEL[p.asset_type]}</b><br>${ASSET_LABEL[p.asset_type]}`;
-    if (f.layer.id === "stores") return `<b>${p.name}</b><br>${p.type}${s !== "0" && p["c" + s] ? "<br><span style='color:#b3261e'>Under water " + SLR_LABEL[s] + "</span>" : ""}`;
+    const kind = esc(ASSET_LABEL[p.asset_type] || p.asset_type);
+    if (f.layer.id === "assets") return `<b>${p.name ? esc(p.name) : kind}</b><br>${kind}`;
+    if (f.layer.id === "stores") return `<b>${esc(p.name)}</b><br>${esc(p.type)}${s !== "0" && p["c" + s] ? "<br><span style='color:#b3261e'>Under water " + SLR_LABEL[s] + "</span>" : ""}`;
     const share = s === "0" ? 0 : Math.round(p["share_" + s] * 100);
     const txt = s !== "0" && p["s" + s] ? `Under water ${SLR_LABEL[s]}: ${share}% of the station area floods`
       : share > 0 ? `Water at the edge ${SLR_LABEL[s]}: ${share}% of the station area floods` : "";
-    return `<b>${p.name}</b> · ${p.lines} Line` + (txt ? `<br>${txt}` : "");
+    return `<b>${esc(p.name)}</b> · ${esc(p.lines)} Line` + (txt ? `<br>${txt}` : "");
   }
 
   // ------------------------------------------------------------------ wiring
@@ -285,6 +317,7 @@
       paint: { "text-color": "#6f6b62", "text-halo-color": "#fdfcfa", "text-halo-width": 1.6 } });
     press = OP.create(ink, $("#ink-canvas"), D.ink);
     ink.on("move", drawInk); ink.on("resize", drawInk);
+    wireTips(ink, pickInk);
     ready();
   });
 
@@ -315,6 +348,6 @@
     const panel = $("#panel"), head = panel.querySelector(".card-head");
     const fold = (shut) => { panel.classList.toggle("collapsed", shut); head.setAttribute("aria-expanded", String(!shut)); };
     head.addEventListener("click", () => fold(!panel.classList.contains("collapsed")));
-    [planner, atlas].forEach((m) => m.on("movestart", (e) => { if (e.originalEvent) fold(true); }));     // user moves only, not the camera sync
+    [planner, atlas, ink].forEach((m) => m.on("movestart", (e) => { if (e.originalEvent) fold(true); }));     // user moves only, not the camera sync
   }
 })();

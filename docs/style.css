@@ -90,6 +90,7 @@ details summary { cursor: pointer; padding: 2px 0; }
 .sw.line { height: 0; border: 0; border-top: 3px solid; border-radius: 0; width: 18px; }
 .ramp { display: flex; height: 10px; border-radius: 3px; overflow: hidden; margin: 4px 0 2px; } .ramp i { flex: 1; }
 .ramp-ax { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--text-3); }
+.mapwrap .maplibregl-popup { z-index: 5; }      /* above the ink canvas and paper grain, which sit over the map */
 .maplibregl-popup-content { font: 12px/1.4 "IBM Plex Sans", system-ui, sans-serif; padding: 8px 10px; border-radius: 8px; }
 .maplibregl-ctrl-bottom-left { left: 12px; } .maplibregl-ctrl-bottom-right { right: 12px; }
 

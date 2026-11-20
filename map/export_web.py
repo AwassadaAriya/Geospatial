@@ -139,7 +139,8 @@ def main():
              for i, dist in enumerate([30, 75, 135, 215, 320])]
     write("shore", to_geojson(gpd.GeoDataFrame(rings, crs=CRS), ["i"]))
 
-    write("stats", {"meta": {"parcels": int(len(p)), "bounds": [round(v, 4) for v in aoi.to_crs(4326).total_bounds]}})
+    write("stats", {"meta": {"parcels": int(len(p)), "bounds": [round(v, 4) for v in aoi.to_crs(4326).total_bounds],
+                             "svi_indicators": int(svi["vuln_n_indicators"].iloc[0])}})     # how many percentile ranks vuln_pct averages
 
 
 if __name__ == "__main__":

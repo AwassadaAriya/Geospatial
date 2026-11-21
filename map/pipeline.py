@@ -16,7 +16,13 @@ from load_data import (RAW, PROC, EXP, CRS, SCENARIOS, DEM, to_crs, load_aoi, lo
                        load_floods, load_svi)
 
 EXP.mkdir(parents=True, exist_ok=True)
+REFRESH = False                 # set by --refresh: ignore cached downloads and fetch them again
 NODATA = -9999.0
+# impervious: NLCD at 30 m for the whole study area, one request so every year shares one grid
+NLCD_YEARS = (2021, 2001)       # current, and the earliest NLCD year, for change over time
+NLCD_TIF = {y: RAW / f"nlcd_impervious_{y}.tif" for y in NLCD_YEARS}
+NOTEBOOK_IMPERVIOUS = PROC / "impervious_frac_26986.tif"     # East Boston only, from the notebook; kept for comparison
+PAVED_MIN_SHARE = 0.5           # "public paved land": public or tax-exempt owner and at least this impervious share
 PARCEL_SERVICE = "https://gis.boston.gov/arcgis/rest/services/Assessing/Property_Assessment_FY25/MapServer/0"
 PARCEL_FIELDS = "GIS_ID,OWNER,LU,LU_DESC,TOTAL_VALUE,BLDG_VALUE,YR_BUILT"
 AIRFIELD_MIN_AREA_M2 = 100_000
@@ -31,8 +37,12 @@ PUBLIC_KEYWORDS = [
     "MASS HIGHWAY", "CONSERVATION COMM", "BOSTON PUBLIC",
 ]
 
+def cached(p):
+    return p.exists() and not REFRESH
+
+
 def stage_dem(tile_m=1500, res=1):
-    if DEM["west"].exists():
+    if cached(DEM["west"]):
         print("dem west exists"); return
     import py3dep, rioxarray
     from rioxarray.merge import merge_arrays
@@ -46,7 +56,7 @@ def stage_dem(tile_m=1500, res=1):
     parts = []
     for n, t in enumerate(tiles):
         f = tiles_dir / f"tile_{n:03d}.tif"
-        if not f.exists():
+        if not cached(f):
             t4326 = gpd.GeoSeries([t], crs=CRS).to_crs(4326).iloc[0]
             for k in range(5):
                 try:
@@ -95,7 +105,7 @@ def arcgis_query(layer_url, bounds_4326, out_fields, chunk=400):
 
 def stage_parcels():
     p = RAW / "parcels_raw_west.parquet"
-    if p.exists():
+    if cached(p):
         print("parcels west exists"); return
     b = tuple(load_aoi("west").to_crs(4326).total_bounds)
     raw = arcgis_query(PARCEL_SERVICE, b, PARCEL_FIELDS)
@@ -168,7 +178,7 @@ def ckan_geojson(slug):
 
 def stage_assets():
     p = RAW / "assets_study.parquet"
-    if p.exists():
+    if cached(p):
         print("assets exist"); return
     study = load_aoi().buffer(200).geometry.iloc[0]
     parts = []
@@ -208,27 +218,40 @@ def zstats(parcels, raster, stats, all_touched=False):
     return pd.DataFrame(zs, index=parcels.index)
 
 
-def impervious(feat):
-    """East Boston: the notebook's raster. Added area: NLCD 2021 at 30 m, read straight from the source raster."""
+def stage_nlcd():
+    """NLCD impervious percent at 30 m for the whole study area, all years in one request (same grid)."""
+    if all(cached(p) for p in NLCD_TIF.values()):
+        print("nlcd exists"); return
+    import pygeohydro as gh
+    # buffered: NLCD comes back masked to the shape, and parcels on the edge need the cells just outside it
+    area = load_aoi().buffer(200).to_crs(4326)
+    ds = gh.nlcd_bygeom(area, resolution=30, years={"impervious": list(NLCD_YEARS)})
+    d = list(ds.values())[0]
+    for y, p in NLCD_TIF.items():
+        d[f"impervious_{y}"].rio.to_raster(p, compress="lzw")
+        print("wrote", p, flush=True)
+
+
+def nlcd_share(feat, year):
+    """Share of each parcel that is impervious (0-1): mean NLCD percent over every 30 m cell the parcel touches."""
+    tif = NLCD_TIF[year]
+    with rasterio.open(tif) as src:
+        w = feat.to_crs(src.crs)
+        zs = zonal_stats(w.geometry, str(tif), stats=["mean"], all_touched=True, nodata=src.nodata)
+    v = pd.Series([z["mean"] for z in zs], index=feat.index, dtype="float64")
+    return v.where((v >= 0) & (v <= 100)) / 100.0
+
+
+def notebook_share(feat):
+    """The old East Boston method (notebook raster on the 1 m DEM grid), for comparison only. NaN outside East Boston."""
     out = pd.Series(np.nan, index=feat.index)
+    if not NOTEBOOK_IMPERVIOUS.exists():
+        print("notebook impervious raster not found; impervious_share_notebook left empty"); return out
     east = feat["zone"] == "east"
-    out[east] = zstats(feat[east], PROC / "impervious_frac_26986.tif", ["mean"])["mean"]
+    out[east] = zstats(feat[east], NOTEBOOK_IMPERVIOUS, ["mean"])["mean"]
     small = east & out.isna()
     if small.any():
-        out[small] = zstats(feat[small], PROC / "impervious_frac_26986.tif", ["mean"], all_touched=True)["mean"]
-    tif = RAW / "nlcd_impervious_2021_west.tif"
-    try:
-        if not tif.exists():
-            import pygeohydro as gh
-            ds = gh.nlcd_bygeom(load_aoi("west").to_crs(4326)[["geometry"]], resolution=30, years={"impervious": [2021]})
-            list(ds.values())[0]["impervious_2021"].rio.to_raster(tif)
-        with rasterio.open(tif) as src:
-            w = feat[~east].to_crs(src.crs)
-            zs = zonal_stats(w.geometry, str(tif), stats=["mean"], all_touched=True, nodata=src.nodata)
-        v = pd.Series([z["mean"] for z in zs], index=w.index, dtype="float64")
-        out[~east] = (v.where((v >= 0) & (v <= 100)) / 100.0)
-    except Exception as e:
-        print("impervious for the added area unavailable:", type(e).__name__, str(e)[:120])
+        out[small] = zstats(feat[small], NOTEBOOK_IMPERVIOUS, ["mean"], all_touched=True)["mean"]
     return out
 
 
@@ -245,7 +268,10 @@ def stage_features():
         z = zstats(feat[m], path, ["mean", "min"])
         feat.loc[m, "ground_mean_m"] = z["mean"].values; feat.loc[m, "ground_min_m"] = z["min"].values
     print("elevation done", flush=True)
-    feat["impervious_frac"] = impervious(feat)
+    stage_nlcd()
+    feat["impervious_frac"] = nlcd_share(feat, 2021)             # same method in all ten neighbourhoods
+    feat["impervious_share_2001"] = nlcd_share(feat, 2001)
+    feat["impervious_share_notebook"] = notebook_share(feat)
 
     pts = gpd.GeoDataFrame(feat[["parcel_id"]], geometry=feat.representative_point(), crs=CRS)
     j = gpd.sjoin_nearest(pts, load_svi(), how="left", max_distance=300)
@@ -262,13 +288,33 @@ def stage_score():
     types = hit.groupby("index_right")["asset_type"].agg(lambda x: ", ".join(sorted(set(map(str, x)))))
     feat["asset_types"] = types.reindex(feat.index).fillna("")
     feat["critical_asset"] = feat["asset_types"] != ""
-    feat["unpave_candidate"] = feat["owner_type"].isin(["public", "exempt"]) & (feat["impervious_frac"] >= 0.5)
+    public = feat["owner_type"].isin(["public", "exempt"])
+    feat["unpave_candidate"] = public & (feat["impervious_frac"] >= PAVED_MIN_SHARE)
+    compare_methods(feat, public)
     feat = feat.drop(columns=[c for c in feat.columns if c.startswith(("depth_", "wse_"))])
     feat.to_parquet(EXP / "parcels.parquet")
     feat.drop(columns="geometry").to_csv(EXP / "parcels.csv", index=False)
     print(f"wrote parcels: {len(feat)} | flooded at 36in: {int((feat.flood_frac_36 > 0).sum())}", flush=True)
 
 
+def compare_methods(feat, public):
+    """East Boston: how the public-paved flag changes between the notebook raster and NLCD 2021."""
+    e = feat[(feat["zone"] == "east") & feat["impervious_share_notebook"].notna()]
+    if e.empty:
+        print("no notebook values to compare"); return
+    new = e["unpave_candidate"]
+    old = public[e.index] & (e["impervious_share_notebook"] >= PAVED_MIN_SHARE)
+    d = e["impervious_frac"] - e["impervious_share_notebook"]
+    print(f"East Boston, {len(e)} parcels: impervious share NLCD 2021 minus notebook: "
+          f"mean {d.mean():+.3f}, median abs {d.abs().median():.3f}, |diff| > 0.1 for {int((d.abs() > 0.1).sum())}")
+    print(f"  public paved: notebook {int(old.sum())} -> NLCD 2021 {int(new.sum())} | "
+          f"changed status {int((old != new).sum())} (gained {int((new & ~old).sum())}, lost {int((old & ~new).sum())})")
+
+
 if __name__ == "__main__":
-    for stage in sys.argv[1:]:
-        {"dem": stage_dem, "parcels": stage_parcels, "assets": stage_assets, "features": stage_features, "score": stage_score}[stage]()
+    args = sys.argv[1:]
+    REFRESH = "--refresh" in args
+    stages = {"dem": stage_dem, "parcels": stage_parcels, "assets": stage_assets, "nlcd": stage_nlcd,
+              "features": stage_features, "score": stage_score}
+    for stage in [a for a in args if a != "--refresh"]:
+        stages[stage]()
